@@ -6,7 +6,7 @@ gspread
 oauth2client
 langchain-huggingface
 langchain-pinecone
-pinecone-client
+pinecone-client==5.0.1
 langchain-google-genai
 langchain-core
 sentence-transformers
