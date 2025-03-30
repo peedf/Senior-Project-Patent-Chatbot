@@ -1,0 +1,11 @@
+streamlit
+pandas
+python-dotenv
+nest_asyncio
+gspread
+oauth2client
+langchain-huggingface
+langchain-pinecone
+pinecone-client
+langchain-google-genai
+langchain-core
