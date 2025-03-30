@@ -9,3 +9,6 @@ langchain-pinecone
 pinecone-client
 langchain-google-genai
 langchain-core
+sentence-transformers
+langchain
+google-generativeai

@@ -1,14 +1,12 @@
-import os
 import re
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 import nest_asyncio
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 from langchain.schema import Document
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -19,15 +17,19 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 nest_asyncio.apply()
-load_dotenv()
 
 # -------------------- Configuration --------------------
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "us-east-1-aws")
+# Replace os.getenv(...) with st.secrets
+PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
+PINECONE_ENVIRONMENT = st.secrets.get("PINECONE_ENVIRONMENT", "us-east-1-aws")
 PINECONE_INDEX_NAME = "thai-patent-index"
 EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 GENAI_MODEL = "gemini-2.0-flash"
+
 USER_UPLOADS_DIR = "user_uploads"
+
+# Create directory if it doesn't exist
+import os
 os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
 
 # -------------------- Page Setup --------------------
@@ -73,7 +75,7 @@ def parse_csv_row(row):
     combined_text = ' '.join(combined_text.split())
     return combined_text.strip()
 
-def check_similarity(user_text):
+def check_similarity(user_text, embeddings, index):
     user_embedding = embeddings.embed_query(user_text)
     query_response = index.query(vector=user_embedding, top_k=5, include_metadata=True)
     return query_response
@@ -134,6 +136,7 @@ qa_prompt = ChatPromptTemplate.from_messages([
     MessagesPlaceholder("chat_history"),
     ("user", "{input}")
 ])
+
 rag_chain = (
     {"context": retriever, "question": RunnablePassthrough()}
     | rag_prompt_template
@@ -165,7 +168,7 @@ def main_page():
                     df['ข้อถือสิทธิ'] = df['ข้อถือสิทธิ'].fillna('')
                     df['combined_text'] = df.apply(parse_csv_row, axis=1)
                     user_text = ' '.join(df['combined_text'].tolist())
-                    similarity_results = check_similarity(user_text)
+                    similarity_results = check_similarity(user_text, embeddings, index)
                     if similarity_results.matches:
                         sim_msg = "**ผลการตรวจสอบความคล้ายของ Patent Data:**\n\n"
                         similar_context = ""
@@ -191,6 +194,7 @@ def main_page():
     if st.sidebar.button("Clear Conversation"):
         st.session_state.chat_history = [AIMessage(content="สวัสดีครับ ยินดีต้อนรับสู่ระบบตรวจสอบข้อถือสิทธิ์ ...")]
     chat_placeholder = st.empty()
+    
     def render_chat():
         with chat_placeholder.container():
             for message in st.session_state.chat_history:
@@ -198,6 +202,7 @@ def main_page():
                     st.markdown(f"<div class='user-message'>{message.content}</div>", unsafe_allow_html=True)
                 elif isinstance(message, AIMessage):
                     st.markdown(f"<div class='assistant-message'>{message.content}</div>", unsafe_allow_html=True)
+    
     render_chat()
     
     user_input = st.chat_input("พิมพ์คำถามของคุณเกี่ยวกับสิทธิบัตรที่อัปโหลด...")
@@ -243,21 +248,27 @@ def admin_page():
     if st.button("Update Data from Google Sheet"):
         def update_from_google_sheet():
             try:
+                # Instead of a local JSON file, retrieve from st.secrets
                 scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
-                creds = ServiceAccountCredentials.from_json_keyfile_name("gen-lang-client-0157250814-ff49622ff821.json", scope)
+                service_account_info = st.secrets["google_service_account"]
+                creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
                 client = gspread.authorize(creds)
+
                 sheet = client.open("Database อนุสิทธิ Food Business Matching").sheet1
                 data = sheet.get_all_records()
                 df = pd.DataFrame(data)
+
                 required_columns = ['บทสรุปการประดิษฐ์', 'ข้อถือสิทธิ']
                 for col in required_columns:
                     if col in df.columns:
                         df[col] = df[col].fillna('')
                     else:
                         df[col] = ''
+
                 df['combined_text'] = df.apply(parse_csv_row, axis=1)
                 documents = []
                 metadata_columns = ["ประเภท", "อนุสิทธิบัตร No.", "เลขที่คำขอ", "ชื่อผลงาน (TH)", "ชื่อผลงาน (EN)", "เจ้าของผลงาน", "PDF"]
+                
                 for idx, row in df.iterrows():
                     unique_id = get_unique_id(row)
                     if unique_id is None:
@@ -265,12 +276,16 @@ def admin_page():
                     metadata = {col: row[col] for col in metadata_columns if col in row}
                     doc = Document(page_content=row['combined_text'], metadata=metadata, id=unique_id)
                     documents.append(doc)
+
                 # Overwrite the existing index: clear all vectors.
                 index.delete(delete_all=True)
+                # Now add documents to Pinecone
                 vector_store.add_documents(documents=documents)
+                
                 return f"Google Sheet data updated: {len(documents)} documents upserted."
             except Exception as e:
                 return f"Error updating from Google Sheet: {e}"
+        
         update_message = update_from_google_sheet()
         st.success(update_message)
     st.sidebar.button("Return to Main Page", on_click=lambda: st.session_state.update({"page": "main"}))
