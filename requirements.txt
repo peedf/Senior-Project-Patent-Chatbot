@@ -12,3 +12,4 @@ langchain-core
 sentence-transformers
 langchain
 google-generativeai
+openpyxl
